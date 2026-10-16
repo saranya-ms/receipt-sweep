@@ -13,6 +13,8 @@ except (ImportError, ModuleNotFoundError):
     # mcp v2 renamed FastMCP to MCPServer
     from mcp.server.mcpserver import MCPServer as FastMCP
 
+from mcp.types import ToolAnnotations
+
 from .imap_client import IMAPClient
 from .providers import list_providers
 
@@ -30,7 +32,11 @@ mcp = FastMCP(
 _client = IMAPClient()
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List email providers", read_only_hint=True
+    )
+)
 def list_email_providers() -> str:
     """List supported email providers and their setup instructions.
 
@@ -50,7 +56,13 @@ def list_email_providers() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Connect to email inbox",
+        read_only_hint=False,
+        destructive_hint=False,
+    )
+)
 def connect_email(provider: str, email_address: str, app_password: str) -> str:
     """Connect to an email inbox via IMAP.
 
@@ -73,14 +85,24 @@ def connect_email(provider: str, email_address: str, app_password: str) -> str:
         return f"Connection failed: {result['error']}"
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Disconnect email",
+        read_only_hint=False,
+        destructive_hint=False,
+    )
+)
 def disconnect_email() -> str:
     """Disconnect from the current email inbox."""
     _client.disconnect()
     return "Disconnected."
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Check connection status", read_only_hint=True
+    )
+)
 def connection_status() -> str:
     """Check whether an email connection is active."""
     if _client.connected:
@@ -88,7 +110,11 @@ def connection_status() -> str:
     return "Not connected. Use connect_email() first."
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="List mailbox folders", read_only_hint=True
+    )
+)
 def list_folders() -> str:
     """List all folders/labels in the connected mailbox.
 
@@ -103,7 +129,11 @@ def list_folders() -> str:
         return f"Error listing folders: {e}"
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Search emails in a folder", read_only_hint=True
+    )
+)
 def search_emails(
     folder: str = "INBOX",
     from_address: str | None = None,
@@ -148,7 +178,11 @@ def search_emails(
         return f"Error searching: {e}"
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Read an email", read_only_hint=True
+    )
+)
 def read_email(message_id: str, folder: str = "INBOX") -> str:
     """Read the full content of a specific email.
 
@@ -170,7 +204,13 @@ def read_email(message_id: str, folder: str = "INBOX") -> str:
         return f"Error reading email: {e}"
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Save email attachment",
+        read_only_hint=False,
+        destructive_hint=False,
+    )
+)
 def save_attachment(
     message_id: str,
     filename: str,
@@ -201,7 +241,11 @@ def save_attachment(
         return f"Error saving attachment: {e}"
 
 
-@mcp.tool()
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Search all folders", read_only_hint=True
+    )
+)
 def search_all_folders(
     from_address: str | None = None,
     subject_contains: str | None = None,
