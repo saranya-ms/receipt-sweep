@@ -1,6 +1,6 @@
 {
   "name": "receipt-sweep",
-  "owner": { "name": "Sara Monroe" },
+  "owner": { "name": "Saranya Mittadoddi" },
   "plugins": [
     { "name": "receipt-sweep", "source": "./" }
   ]

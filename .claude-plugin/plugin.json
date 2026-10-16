@@ -3,7 +3,7 @@
   "displayName": "Receipt Sweep",
   "version": "1.1.0",
   "description": "Connects to email inboxes via IMAP and lets Claude extract receipts into a spending spreadsheet and an offline HTML dashboard.",
-  "author": { "name": "Sara Monroe" },
+  "author": { "name": "Saranya Mittadoddi" },
   "homepage": "https://github.com/saranya-ms/receipt-sweep",
   "repository": "https://github.com/saranya-ms/receipt-sweep",
   "license": "MIT",
