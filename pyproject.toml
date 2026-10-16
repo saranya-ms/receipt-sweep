@@ -14,8 +14,16 @@ dependencies = [
     "python-dateutil>=2.8",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/receipt_sweep"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.scripts]
 receipt-sweep-mcp = "receipt_sweep.server:main"
