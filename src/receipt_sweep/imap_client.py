@@ -63,6 +63,19 @@ def html_to_text(html: str) -> str:
     return parser.get_text()
 
 
+def _imap_quote(value: str) -> str:
+    """Return an IMAP quoted string, escaping backslashes and double quotes.
+
+    Per RFC 3501, a quoted string is delimited by double quotes and the only
+    characters that must be escaped inside it are ``\\`` and ``"``. Carriage
+    returns and newlines are stripped so a crafted value cannot break out of
+    the SEARCH command or inject extra criteria.
+    """
+    sanitized = value.replace("\r", " ").replace("\n", " ")
+    escaped = sanitized.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _decode_header_value(raw: str | None) -> str:
     """Decode an RFC 2047 encoded header into a plain string."""
     if not raw:
@@ -182,9 +195,9 @@ class IMAPClient:
         # Build IMAP search criteria
         criteria: list[str] = []
         if from_addr:
-            criteria.append(f'FROM "{from_addr}"')
+            criteria.append(f"FROM {_imap_quote(from_addr)}")
         if subject:
-            criteria.append(f'SUBJECT "{subject}"')
+            criteria.append(f"SUBJECT {_imap_quote(subject)}")
         if since:
             try:
                 d = datetime.strptime(since, "%Y-%m-%d")
@@ -199,7 +212,8 @@ class IMAPClient:
                 pass
         if query:
             # Search in subject and body with OR
-            criteria.append(f'OR SUBJECT "{query}" BODY "{query}"')
+            quoted = _imap_quote(query)
+            criteria.append(f"OR SUBJECT {quoted} BODY {quoted}")
 
         search_str = " ".join(criteria) if criteria else "ALL"
 
