@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "receipt-sweep-mcp"
+version = "1.0.0"
+description = "MCP server that connects to email inboxes via IMAP and lets Claude extract receipts and build spending spreadsheets."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "python-dateutil>=2.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/receipt_sweep"]
+
+[project.scripts]
+receipt-sweep-mcp = "receipt_sweep.server:main"
