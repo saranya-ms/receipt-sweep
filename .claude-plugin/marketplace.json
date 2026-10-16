@@ -1,0 +1,7 @@
+{
+  "name": "receipt-sweep",
+  "owner": { "name": "Sara Monroe" },
+  "plugins": [
+    { "name": "receipt-sweep", "source": "./" }
+  ]
+}

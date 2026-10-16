@@ -11,7 +11,7 @@ description: >
 
 Searches the user's email inbox via IMAP for receipts, invoices, and order
 confirmations, extracts transaction data, and builds a categorized xlsx
-spreadsheet.
+spreadsheet plus a self-contained offline HTML dashboard.
 
 ## Prerequisites
 
@@ -180,10 +180,34 @@ Create the workbook with three sheets:
 
 Run `recalc.py` to verify all formulas.
 
-## Step 6 — Deliver results
+## Step 6 — Build the HTML dashboard
 
-1. Send the spreadsheet to the user with `SendUserFile`.
-2. If a device folder is connected, also write it there via `device_commit_files`.
+In addition to the spreadsheet (which still ships), generate a self-contained HTML
+dashboard from the **same extracted rows** — do not re-read any emails.
+
+1. Load the **dataviz skill** for color and chart conventions.
+2. Start from the bundled template `assets/dashboard-template.html` in this skill's
+   folder (when running as a plugin, it is at
+   `${CLAUDE_PLUGIN_ROOT}/skills/receipt-sweep/assets/dashboard-template.html`). Copy it,
+   then replace **only** the `DATA` object near the bottom with the real sweep results:
+   - `title`, `subtitle` — e.g. "2026 Spending Dashboard" and "<email> · <date range>"
+   - `currency` — ISO code (CAD, USD, …) used for all formatting
+   - `kpis.dateRange` — human-readable range
+   - `categories` — `[{name, amount}]`, one per category (total spend)
+   - `monthly` — `[{month: "YYYY-MM", amount}]`, chronological
+   - `merchants` — `[{name, amount}]`, top merchants by spend, sorted descending
+   - `transactions` — `[{date: "YYYY-MM-DD", merchant, category, amount}]`, every row
+   - `footer` — `{source, folders, generated}`
+3. Keep the file **fully offline**: never add a `<script src>`, CDN link, web font, or
+   any external request. The KPI tiles, SVG charts, and sortable table all render in the
+   browser from `DATA` alone. Light and dark are handled by the template.
+4. Save it next to the spreadsheet, e.g. `<Year>-spending-dashboard.html`.
+
+## Step 7 — Deliver results
+
+1. Send **both** files to the user with `SendUserFile`: the spreadsheet, and the
+   dashboard with `display: "render"` so it opens inline.
+2. If a device folder is connected, also write them there via `device_commit_files`.
 3. Report:
    - Total transactions found
    - Total spending amount
@@ -191,7 +215,7 @@ Run `recalc.py` to verify all formulas.
    - Any PDF-only receipts the user may want to review manually
    - Any new stores discovered
 
-## Step 7 — Save sweep state (optional)
+## Step 8 — Save sweep state (optional)
 
 If the user wants incremental sweeps, save the state to project memory:
 - Last sweep date

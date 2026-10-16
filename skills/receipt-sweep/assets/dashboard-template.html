@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spending Dashboard</title>
+<!--
+  Receipt Sweep — offline spending dashboard.
+  SELF-CONTAINED: no CDN, no web fonts, no external requests of any kind.
+  To use: replace the DATA object near the bottom with the real sweep results,
+  update the <title> and the header text, and save as e.g. "2026-spending-dashboard.html".
+  Everything (KPI tiles, SVG charts, sortable table) renders from DATA in the browser.
+-->
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --surface: #ffffff;
+    --surface-2: #f0f2f5;
+    --border: #e3e6ea;
+    --text: #1b1f24;
+    --text-dim: #5b6572;
+    --accent: #2f6df6;
+    --accent-soft: #e7eefe;
+    --grid: #eceef1;
+    /* Categorical palette (accessible, distinct in light & dark) */
+    --c1: #2f6df6; --c2: #16a085; --c3: #e8833a; --c4: #9b59b6;
+    --c5: #e05d6f; --c6: #3aa3d6; --c7: #c0a02c; --c8: #7f8c8d;
+    --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --surface: #171b21; --surface-2: #1e242c; --border: #2a313a;
+      --text: #e6e9ee; --text-dim: #9aa5b1; --accent: #6aa0ff; --accent-soft: #1b2740;
+      --grid: #242b34;
+      --c1: #6aa0ff; --c2: #2fd1ad; --c3: #f0a35e; --c4: #c08be0;
+      --c5: #f0788a; --c6: #5fc0ee; --c7: #e3c95a; --c8: #a6b2bd;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 2px 8px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
+  header.page { margin-bottom: 24px; }
+  header.page h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -.02em; }
+  header.page .sub { color: var(--text-dim); font-size: 14px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 20px 0 28px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+  .kpi .label { color: var(--text-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .kpi .value { font-size: 24px; font-weight: 650; margin-top: 6px; letter-spacing: -.02em; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); margin-bottom: 20px; }
+  .card h2 { margin: 0 0 16px; font-size: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr; gap: 20px; }
+  @media (min-width: 760px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+  .legend-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  .merchants { list-style: none; margin: 0; padding: 0; }
+  .merchants li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .merchants li:last-child { border-bottom: 0; }
+  .merchants .amt { font-variant-numeric: tabular-nums; color: var(--text-dim); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  thead th { text-align: left; padding: 10px 12px; background: var(--surface-2); color: var(--text-dim);
+    font-size: 12px; text-transform: uppercase; letter-spacing: .03em; cursor: pointer; user-select: none; white-space: nowrap; }
+  thead th .arrow { opacity: .5; font-size: 10px; }
+  tbody td { padding: 10px 12px; border-top: 1px solid var(--border); }
+  tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--surface-2); }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12px; }
+  .foot { color: var(--text-dim); font-size: 13px; margin-top: 10px; }
+  .foot b { color: var(--text); font-weight: 600; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .axis { stroke: var(--grid); stroke-width: 1; }
+  .axis-label, .bar-label { fill: var(--text-dim); font-size: 12px; }
+  .val-label { fill: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+  noscript .card { color: var(--text-dim); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1 id="title">Spending Dashboard</h1>
+    <div class="sub" id="subtitle">—</div>
+  </header>
+
+  <noscript>
+    <div class="card">This dashboard renders with JavaScript (locally, no network). Enable
+    JavaScript to view the charts, or open the accompanying spreadsheet.</div>
+  </noscript>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Spending by category</h2>
+      <div id="categoryChart"></div>
+      <div id="categoryLegend"></div>
+    </div>
+    <div class="card">
+      <h2>Spending over time</h2>
+      <div id="monthlyChart"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Top merchants</h2>
+    <ul class="merchants" id="merchants"></ul>
+  </div>
+
+  <div class="card">
+    <h2>All transactions</h2>
+    <div style="overflow-x:auto">
+      <table id="txTable">
+        <thead><tr>
+          <th data-key="date">Date <span class="arrow"></span></th>
+          <th data-key="merchant">Merchant <span class="arrow"></span></th>
+          <th data-key="category">Category <span class="arrow"></span></th>
+          <th data-key="amount" class="num">Amount <span class="arrow"></span></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="foot" id="footer"></div>
+</div>
+
+<script>
+/* ============================================================================
+   REPLACE the entire DATA object below with the real sweep results.
+   - currency: ISO code used for formatting (e.g. "CAD", "USD")
+   - kpis.dateRange: human-readable range string
+   - categories: [{name, amount}]  (amount = total spend in that category)
+   - monthly:    [{month, amount}] (month = "YYYY-MM", chronological)
+   - merchants:  [{name, amount}]  (top merchants by spend, pre-sorted desc)
+   - transactions: [{date:"YYYY-MM-DD", merchant, category, amount}]
+   The sample values below exist only so the template previews on its own.
+   ========================================================================== */
+const DATA = {
+  title: "2026 Spending Dashboard",
+  subtitle: "workwithsara@hotmail.com · Jan 1 – Oct 16, 2026",
+  currency: "CAD",
+  kpis: { dateRange: "Jan 1 – Oct 16, 2026" },
+  categories: [
+    { name: "Apparel", amount: 842.50 },
+    { name: "Food Delivery", amount: 611.20 },
+    { name: "Beauty", amount: 388.75 },
+    { name: "Household", amount: 274.10 },
+    { name: "Food & Beverage", amount: 190.40 },
+    { name: "Home Furnishing", amount: 129.99 }
+  ],
+  monthly: [
+    { month: "2026-01", amount: 210.30 }, { month: "2026-02", amount: 155.00 },
+    { month: "2026-03", amount: 320.45 }, { month: "2026-04", amount: 180.75 },
+    { month: "2026-05", amount: 240.10 }, { month: "2026-06", amount: 410.20 },
+    { month: "2026-07", amount: 95.00 },  { month: "2026-08", amount: 305.60 },
+    { month: "2026-09", amount: 270.40 }, { month: "2026-10", amount: 149.34 }
+  ],
+  merchants: [
+    { name: "Old Navy", amount: 412.30 }, { name: "Uber Eats", amount: 388.90 },
+    { name: "Sephora", amount: 301.25 }, { name: "Amazon", amount: 274.10 },
+    { name: "H&M", amount: 230.20 }
+  ],
+  transactions: [
+    { date: "2026-01-14", merchant: "Old Navy", category: "Apparel", amount: 84.20 },
+    { date: "2026-02-03", merchant: "Uber Eats", category: "Food Delivery", amount: 32.50 },
+    { date: "2026-03-22", merchant: "Sephora", category: "Beauty", amount: 120.00 },
+    { date: "2026-06-09", merchant: "Amazon", category: "Household", amount: 54.99 },
+    { date: "2026-08-17", merchant: "H&M", category: "Apparel", amount: 61.40 },
+    { date: "2026-10-02", merchant: "IKEA", category: "Home Furnishing", amount: 129.99 }
+  ]
+};
+
+/* -------------------------- rendering (no deps) --------------------------- */
+const PALETTE = ["--c1","--c2","--c3","--c4","--c5","--c6","--c7","--c8"];
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const money = n => new Intl.NumberFormat(undefined, { style: "currency", currency: DATA.currency || "USD" }).format(n || 0);
+const SVGNS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, text) => {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+function renderHeader() {
+  document.getElementById("title").textContent = DATA.title || "Spending Dashboard";
+  document.title = DATA.title || "Spending Dashboard";
+  document.getElementById("subtitle").textContent = DATA.subtitle || "";
+}
+
+function renderKPIs() {
+  const txns = DATA.transactions || [];
+  const total = (DATA.categories || []).reduce((s, c) => s + c.amount, 0)
+    || txns.reduce((s, t) => s + t.amount, 0);
+  const count = txns.length;
+  const avg = count ? total / count : 0;
+  const cats = (DATA.categories || []).length;
+  const items = [
+    { label: "Total spend", value: money(total) },
+    { label: "Transactions", value: String(count) },
+    { label: "Avg / transaction", value: money(avg) },
+    { label: "Categories", value: String(cats) },
+    { label: "Date range", value: (DATA.kpis && DATA.kpis.dateRange) || "—" }
+  ];
+  const host = document.getElementById("kpis");
+  host.innerHTML = "";
+  for (const it of items) {
+    const card = document.createElement("div");
+    card.className = "kpi";
+    card.innerHTML = `<div class="label"></div><div class="value"></div>`;
+    card.querySelector(".label").textContent = it.label;
+    card.querySelector(".value").textContent = it.value;
+    host.appendChild(card);
+  }
+}
+
+function renderCategoryChart() {
+  const data = (DATA.categories || []).slice().sort((a, b) => b.amount - a.amount);
+  const host = document.getElementById("categoryChart");
+  const legend = document.getElementById("categoryLegend");
+  host.innerHTML = ""; legend.innerHTML = "";
+  if (!data.length) return;
+  const W = 440, rowH = 34, padL = 8, padR = 120, top = 6;
+  const H = top + data.length * rowH + 6;
+  const max = Math.max(...data.map(d => d.amount));
+  const total = data.reduce((s, d) => s + d.amount, 0);
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  data.forEach((d, i) => {
+    const y = top + i * rowH;
+    const bw = Math.max(2, (W - padL - padR) * (d.amount / max));
+    const color = cssVar(PALETTE[i % PALETTE.length]);
+    svg.appendChild(el("rect", { x: padL, y: y + 6, width: bw, height: rowH - 14, rx: 5, fill: color }));
+    svg.appendChild(el("text", { x: padL, y: y + 2, class: "bar-label" }, d.name));
+    const pct = total ? Math.round((d.amount / total) * 100) : 0;
+    svg.appendChild(el("text", { x: padL + bw + 8, y: y + rowH / 2 + 4, class: "val-label" },
+      `${money(d.amount)}  ·  ${pct}%`));
+  });
+  host.appendChild(svg);
+}
+
+function renderMonthlyChart() {
+  const data = (DATA.monthly || []).slice();
+  const host = document.getElementById("monthlyChart");
+  host.innerHTML = "";
+  if (!data.length) return;
+  const W = 440, H = 240, padL = 8, padR = 8, padT = 10, padB = 34;
+  const max = Math.max(...data.map(d => d.amount)) || 1;
+  const plotH = H - padT - padB, plotW = W - padL - padR;
+  const bw = plotW / data.length;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  svg.appendChild(el("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, class: "axis" }));
+  data.forEach((d, i) => {
+    const h = Math.max(1, plotH * (d.amount / max));
+    const x = padL + i * bw + bw * 0.18;
+    const w = bw * 0.64;
+    const y = H - padB - h;
+    svg.appendChild(el("rect", { x, y, width: w, height: h, rx: 4, fill: cssVar("--accent") }));
+    const label = (d.month || "").slice(5); // MM
+    svg.appendChild(el("text", { x: x + w / 2, y: H - padB + 16, "text-anchor": "middle", class: "axis-label" }, label));
+  });
+  host.appendChild(svg);
+}
+
+function renderMerchants() {
+  const host = document.getElementById("merchants");
+  host.innerHTML = "";
+  (DATA.merchants || []).forEach(m => {
+    const li = document.createElement("li");
+    const name = document.createElement("span"); name.textContent = m.name;
+    const amt = document.createElement("span"); amt.className = "amt"; amt.textContent = money(m.amount);
+    li.appendChild(name); li.appendChild(amt); host.appendChild(li);
+  });
+}
+
+let sortState = { key: "date", dir: 1 };
+function renderTable() {
+  const tbody = document.querySelector("#txTable tbody");
+  const rows = (DATA.transactions || []).slice();
+  const { key, dir } = sortState;
+  rows.sort((a, b) => {
+    let av = a[key], bv = b[key];
+    if (key === "amount") { av = +av; bv = +bv; return (av - bv) * dir; }
+    av = String(av).toLowerCase(); bv = String(bv).toLowerCase();
+    return av < bv ? -dir : av > bv ? dir : 0;
+  });
+  tbody.innerHTML = "";
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    const td = (txt, cls) => { const d = document.createElement("td"); if (cls) d.className = cls; d.textContent = txt; return d; };
+    tr.appendChild(td(r.date));
+    tr.appendChild(td(r.merchant));
+    const cat = document.createElement("td");
+    const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = r.category;
+    cat.appendChild(tag); tr.appendChild(cat);
+    tr.appendChild(td(money(r.amount), "num"));
+    tbody.appendChild(tr);
+  }
+  document.querySelectorAll("#txTable thead th").forEach(th => {
+    const a = th.querySelector(".arrow");
+    a.textContent = th.dataset.key === key ? (dir === 1 ? "▲" : "▼") : "";
+  });
+}
+document.querySelectorAll("#txTable thead th").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    sortState = { key, dir: sortState.key === key ? -sortState.dir : 1 };
+    renderTable();
+  });
+});
+
+function renderFooter() {
+  const f = DATA.footer || {};
+  document.getElementById("footer").innerHTML =
+    `<b>Source:</b> ${f.source || DATA.subtitle || "—"} &nbsp;·&nbsp; ` +
+    `<b>Folders:</b> ${f.folders || "—"} &nbsp;·&nbsp; ` +
+    `<b>Currency:</b> ${DATA.currency || "—"} &nbsp;·&nbsp; ` +
+    `<b>Generated:</b> ${f.generated || new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+}
+
+renderHeader(); renderKPIs(); renderCategoryChart(); renderMonthlyChart();
+renderMerchants(); renderTable(); renderFooter();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "receipt-sweep",
+  "displayName": "Receipt Sweep",
+  "version": "1.1.0",
+  "description": "Connects to email inboxes via IMAP and lets Claude extract receipts into a spending spreadsheet and an offline HTML dashboard.",
+  "author": { "name": "Sara Monroe" },
+  "homepage": "https://github.com/saranya-ms/receipt-sweep",
+  "repository": "https://github.com/saranya-ms/receipt-sweep",
+  "license": "MIT",
+  "keywords": ["receipts", "email", "imap", "spreadsheet", "expenses", "finance"],
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://github.com/saranya-ms/receipt-sweep#readme",
+  "supportUrl": "https://github.com/saranya-ms/receipt-sweep/issues",
+  "privacyPolicyUrl": "https://github.com/saranya-ms/receipt-sweep#privacy-policy",
+  "mcpServers": {
+    "receipt-sweep": {
+      "command": "uvx",
+      "args": ["--from", "${CLAUDE_PLUGIN_ROOT}", "receipt-sweep-mcp"]
+    }
+  }
+}
