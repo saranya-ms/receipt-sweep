@@ -2,9 +2,11 @@
 
 import email
 import email.utils
+import functools
 import imaplib
 import re
 import ssl
+import threading
 from datetime import date, datetime
 from email.header import decode_header
 from html.parser import HTMLParser
@@ -90,13 +92,102 @@ def _decode_header_value(raw: str | None) -> str:
     return " ".join(decoded)
 
 
+# IMAP wants English month abbreviations regardless of the system locale.
+_IMAP_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _imap_date(value: str, field: str) -> str:
+    """Convert YYYY-MM-DD to IMAP's DD-Mon-YYYY, rejecting anything else."""
+    try:
+        d = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"{field} '{value}' must be in YYYY-MM-DD format.") from None
+    return f"{d.day:02d}-{_IMAP_MONTHS[d.month - 1]}-{d.year}"
+
+# Errors that mean the IMAP session itself is gone (dropped socket, server
+# hang-up), as opposed to a single command being rejected.
+_CONNECTION_ERRORS = (imaplib.IMAP4.abort, OSError, EOFError)
+
+_LOGIN_HINT = (
+    "Check the email address, and make sure you used an App Password rather "
+    "than your regular account password (see list_email_providers for how to "
+    "create one)."
+)
+
+
+class ConnectionLost(RuntimeError):
+    """The IMAP session dropped and could not be re-established."""
+
+
+def _serialized(method):
+    """Run an IMAP operation under the client lock, reconnecting once on a drop.
+
+    imaplib connections are not thread-safe: when an MCP client issues several
+    tool calls at once, their commands interleave on the one socket and corrupt
+    the stream. The lock makes concurrent calls take turns instead.
+    """
+
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            if not self._conn:
+                raise RuntimeError("Not connected")
+            try:
+                return method(self, *args, **kwargs)
+            except _CONNECTION_ERRORS:
+                if not self._reconnect():
+                    raise ConnectionLost(
+                        "The connection to the mail server was lost. "
+                        "Call connect_email again."
+                    )
+                return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+# Monetary amounts like "$12.34", "€ 5", or "1,234.56".
+_MONEY_RE = re.compile(r"[$€£¥]\s?\d|\b\d{1,3}(?:[,.]\d{3})*[.,]\d{2}\b")
+_HTML_TAG_RE = re.compile(r"<(?:table|tr|td|div|p|br|span)\b", re.IGNORECASE)
+
+
+def _pick_body(body_text: str, body_html: str) -> str:
+    """Choose the most useful readable body from an email's text and HTML parts.
+
+    Many retailers (e.g. Old Navy) send a plain-text part that holds only
+    links, with the order summary and totals in the HTML part. Prefer whichever
+    version carries more monetary amounts; on a tie keep the plain text.
+    """
+    if body_text and _HTML_TAG_RE.search(body_text):
+        # Some senders put raw HTML in the text/plain part.
+        body_text = html_to_text(body_text)
+    html_text = html_to_text(body_html) if body_html else ""
+    candidates = [c for c in (body_text, html_text) if c.strip()]
+    if not candidates:
+        return ""
+    return max(candidates, key=lambda c: len(_MONEY_RE.findall(c)))
+
+
+def _is_attachment(part) -> bool:
+    """True for attached files, including PDFs sent inline (common for receipts)."""
+    disposition = str(part.get("Content-Disposition", ""))
+    if "attachment" in disposition:
+        return True
+    filename = (part.get_filename() or "").lower()
+    return part.get_content_type() == "application/pdf" or filename.endswith(".pdf")
+
+
 class IMAPClient:
-    """Manages a single IMAP connection."""
+    """Manages a single IMAP connection, safe to share between threads."""
 
     def __init__(self):
         self._conn: imaplib.IMAP4_SSL | None = None
         self._email: str = ""
         self._provider_id: str = ""
+        # Held in memory for the session only so a dropped connection can be
+        # re-established transparently; cleared on disconnect.
+        self._creds: tuple[str, int, str, str] | None = None
+        self._lock = threading.RLock()
 
     @property
     def connected(self) -> bool:
@@ -105,6 +196,12 @@ class IMAPClient:
     @property
     def email_address(self) -> str:
         return self._email
+
+    @staticmethod
+    def _open(host: str, port: int, email_addr: str, password: str) -> imaplib.IMAP4_SSL:
+        conn = imaplib.IMAP4_SSL(host, port, ssl_context=ssl.create_default_context())
+        conn.login(email_addr, password)
+        return conn
 
     def connect(self, provider_or_host: str, email_addr: str, password: str, port: int = 993) -> dict:
         """Connect and authenticate via IMAP.
@@ -120,34 +217,64 @@ class IMAPClient:
             host = provider_or_host
             self._provider_id = "custom"
 
-        ctx = ssl.create_default_context()
-        try:
-            self._conn = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
-            self._conn.login(email_addr, password)
-        except imaplib.IMAP4.error as exc:
-            self._conn = None
-            return {"ok": False, "error": f"Login failed: {exc}"}
-        except Exception as exc:
-            self._conn = None
-            return {"ok": False, "error": f"Connection failed: {exc}"}
+        with self._lock:
+            try:
+                self._conn = self._open(host, port, email_addr, password)
+            except imaplib.IMAP4.error as exc:
+                self._conn = None
+                return {"ok": False, "error": f"Login failed: {exc}. {_LOGIN_HINT}"}
+            except Exception as exc:
+                self._conn = None
+                return {"ok": False, "error": f"Connection failed: {exc}"}
 
-        self._email = email_addr
+            self._email = email_addr
+            self._creds = (host, port, email_addr, password)
         return {"ok": True, "email": email_addr, "host": host}
 
-    def disconnect(self) -> dict:
-        if self._conn:
+    def _reconnect(self) -> bool:
+        """Re-open a dropped session with the stored credentials. Caller holds the lock."""
+        old, self._conn = self._conn, None
+        if old is not None:
             try:
-                self._conn.logout()
+                old.logout()
             except Exception:
                 pass
-            self._conn = None
-        self._email = ""
+        if not self._creds:
+            return False
+        try:
+            self._conn = self._open(*self._creds)
+        except Exception:
+            return False
+        return True
+
+    def disconnect(self) -> dict:
+        with self._lock:
+            if self._conn:
+                try:
+                    self._conn.logout()
+                except Exception:
+                    pass
+                self._conn = None
+            self._email = ""
+            self._creds = None
         return {"ok": True}
 
+    def _select(self, folder: str) -> bool:
+        """SELECT a folder read-only, trying the quoted name then the bare one."""
+        for name in (_imap_quote(folder), folder):
+            try:
+                status, _ = self._conn.select(name, readonly=True)
+            except imaplib.IMAP4.abort:
+                raise
+            except imaplib.IMAP4.error:
+                continue
+            if status == "OK":
+                return True
+        return False
+
+    @_serialized
     def list_folders(self) -> list[str]:
         """Return all mailbox folder names."""
-        if not self._conn:
-            raise RuntimeError("Not connected")
         _status, data = self._conn.list()
         folders: list[str] = []
         for item in data:
@@ -164,6 +291,7 @@ class IMAPClient:
                     folders.append(name)
         return folders
 
+    @_serialized
     def search_emails(
         self,
         folder: str = "INBOX",
@@ -174,23 +302,15 @@ class IMAPClient:
         before: str | None = None,
         limit: int = 50,
     ) -> list[dict]:
-        """Search for emails. Returns list of {uid, date, from, subject, snippet}.
+        """Search for emails. Returns list of {id, date, from, subject}.
 
         since/before: YYYY-MM-DD strings.
         query: a text string to search in subject or body.
+        Raises ValueError if the folder can't be opened or the server rejects
+        the search, rather than returning a misleading empty result.
         """
-        if not self._conn:
-            raise RuntimeError("Not connected")
-
-        try:
-            status, _ = self._conn.select(f'"{folder}"', readonly=True)
-            if status != "OK":
-                # Try without quotes
-                status, _ = self._conn.select(folder, readonly=True)
-                if status != "OK":
-                    return []
-        except Exception:
-            return []
+        if not self._select(folder):
+            raise ValueError(f"Folder '{folder}' could not be opened.")
 
         # Build IMAP search criteria
         criteria: list[str] = []
@@ -199,17 +319,9 @@ class IMAPClient:
         if subject:
             criteria.append(f"SUBJECT {_imap_quote(subject)}")
         if since:
-            try:
-                d = datetime.strptime(since, "%Y-%m-%d")
-                criteria.append(f'SINCE {d.strftime("%d-%b-%Y")}')
-            except ValueError:
-                pass
+            criteria.append(f"SINCE {_imap_date(since, 'since_date')}")
         if before:
-            try:
-                d = datetime.strptime(before, "%Y-%m-%d")
-                criteria.append(f'BEFORE {d.strftime("%d-%b-%Y")}')
-            except ValueError:
-                pass
+            criteria.append(f"BEFORE {_imap_date(before, 'before_date')}")
         if query:
             # Search in subject and body with OR
             quoted = _imap_quote(query)
@@ -219,12 +331,10 @@ class IMAPClient:
 
         try:
             status, data = self._conn.search(None, f"({search_str})")
-        except imaplib.IMAP4.error:
-            # Fallback: simpler search
-            try:
-                status, data = self._conn.search(None, "ALL")
-            except Exception:
-                return []
+        except imaplib.IMAP4.abort:
+            raise
+        except imaplib.IMAP4.error as exc:
+            raise ValueError(f"The mail server rejected the search: {exc}") from exc
 
         if status != "OK" or not data[0]:
             return []
@@ -252,30 +362,32 @@ class IMAPClient:
                     "from": _decode_header_value(msg.get("From", "")),
                     "subject": _decode_header_value(msg.get("Subject", "")),
                 })
+            except _CONNECTION_ERRORS:
+                raise
             except Exception:
                 continue
 
         return results
 
+    def _fetch_message(self, msg_id: str, folder: str):
+        """Fetch and parse a full message, or return None if it doesn't exist."""
+        if not self._select(folder):
+            raise ValueError(f"Folder '{folder}' could not be opened.")
+        _, msg_data = self._conn.fetch(msg_id.encode() if isinstance(msg_id, str) else msg_id, "(RFC822)")
+        if not msg_data or not msg_data[0]:
+            return None
+        raw = msg_data[0][1] if isinstance(msg_data[0], tuple) else msg_data[0]
+        return email.message_from_bytes(raw)
+
+    @_serialized
     def read_email(self, msg_id: str, folder: str = "INBOX", max_body_chars: int = 15000) -> dict:
         """Read the full content of an email by its ID.
 
-        Returns {id, date, from, to, subject, body_text, body_html, attachments[]}.
+        Returns {id, date, from, to, subject, body, attachments[], has_pdf}.
         """
-        if not self._conn:
-            raise RuntimeError("Not connected")
-
-        try:
-            self._conn.select(f'"{folder}"', readonly=True)
-        except Exception:
-            self._conn.select(folder, readonly=True)
-
-        _, msg_data = self._conn.fetch(msg_id.encode() if isinstance(msg_id, str) else msg_id, "(RFC822)")
-        if not msg_data or not msg_data[0]:
+        msg = self._fetch_message(msg_id, folder)
+        if msg is None:
             return {"error": f"Message {msg_id} not found"}
-
-        raw = msg_data[0][1] if isinstance(msg_data[0], tuple) else msg_data[0]
-        msg = email.message_from_bytes(raw)
 
         date_str = msg.get("Date", "")
         parsed_date = email.utils.parsedate_to_datetime(date_str) if date_str else None
@@ -287,9 +399,8 @@ class IMAPClient:
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
-                disposition = str(part.get("Content-Disposition", ""))
 
-                if "attachment" in disposition:
+                if _is_attachment(part):
                     filename = _decode_header_value(part.get_filename() or "")
                     attachments.append({
                         "filename": filename,
@@ -317,8 +428,7 @@ class IMAPClient:
                 else:
                     body_text = text
 
-        # Prefer plain text; fall back to converted HTML
-        display_body = body_text or (html_to_text(body_html) if body_html else "")
+        display_body = _pick_body(body_text, body_html)
         if len(display_body) > max_body_chars:
             display_body = display_body[:max_body_chars] + "\n\n[... truncated ...]"
 
@@ -330,28 +440,21 @@ class IMAPClient:
             "subject": _decode_header_value(msg.get("Subject", "")),
             "body": display_body,
             "attachments": attachments,
-            "has_pdf": any(a["content_type"] == "application/pdf" for a in attachments),
+            "has_pdf": any(
+                a["content_type"] == "application/pdf" or a["filename"].lower().endswith(".pdf")
+                for a in attachments
+            ),
         }
 
+    @_serialized
     def get_attachment(self, msg_id: str, filename: str, folder: str = "INBOX") -> bytes | None:
         """Download a specific attachment by message ID and filename."""
-        if not self._conn:
-            raise RuntimeError("Not connected")
-
-        try:
-            self._conn.select(f'"{folder}"', readonly=True)
-        except Exception:
-            self._conn.select(folder, readonly=True)
-
-        _, msg_data = self._conn.fetch(msg_id.encode() if isinstance(msg_id, str) else msg_id, "(RFC822)")
-        if not msg_data or not msg_data[0]:
+        msg = self._fetch_message(msg_id, folder)
+        if msg is None:
             return None
 
-        raw = msg_data[0][1] if isinstance(msg_data[0], tuple) else msg_data[0]
-        msg = email.message_from_bytes(raw)
-
         for part in msg.walk():
-            if "attachment" in str(part.get("Content-Disposition", "")):
+            if _is_attachment(part):
                 part_filename = _decode_header_value(part.get_filename() or "")
                 if part_filename == filename:
                     return part.get_payload(decode=True)
