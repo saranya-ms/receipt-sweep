@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "receipt-sweep-mcp"
-version = "1.2.0"
+dynamic = ["version"]
 description = "MCP server that connects to email inboxes via IMAP and lets Claude extract receipts and build spending spreadsheets."
 authors = [{ name = "Saranya Mittadoddi" }]
 readme = "README.md"
@@ -21,8 +21,18 @@ dev = [
     "pytest>=7.0",
 ]
 
+[tool.hatch.version]
+path = "src/receipt_sweep/__init__.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/receipt_sweep"]
+
+[tool.uv]
+# The plugin starts the server with `uvx --from <plugin dir>`, and uv reuses its
+# cached build of a local directory until a cache key changes. By default that
+# is only pyproject.toml, so a plugin updated in place could keep running old
+# code. Rebuild whenever any source file changes too.
+cache-keys = [{ file = "pyproject.toml" }, { file = "src/**/*.py" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

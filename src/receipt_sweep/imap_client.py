@@ -273,6 +273,16 @@ class IMAPClient:
         return False
 
     @_serialized
+    def ping(self) -> bool:
+        """Check the session is still alive with a NOOP, reconnecting if it dropped.
+
+        `connected` only says a session was opened; the server may have closed
+        the socket since. Raises ConnectionLost if it can't be restored.
+        """
+        self._conn.noop()
+        return True
+
+    @_serialized
     def list_folders(self) -> list[str]:
         """Return all mailbox folder names."""
         _status, data = self._conn.list()

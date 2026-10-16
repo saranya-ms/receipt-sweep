@@ -135,6 +135,41 @@ def test_bad_date_is_rejected_rather_than_ignored():
         client.search_emails(since="16/07/2026")
 
 
+class _DeadSocketConn:
+    """Looks connected, but the server has already closed the socket."""
+
+    def noop(self):
+        raise imaplib.IMAP4.abort("socket error: EOF")
+
+    def logout(self):
+        pass
+
+
+class _AliveConn:
+    def noop(self):
+        return ("OK", [b"NOOP completed"])
+
+
+def test_ping_reopens_a_silently_dropped_session(monkeypatch):
+    # `connected` stayed True after the socket died, so every later call
+    # failed with EOF while the status still said "Connected".
+    client = IMAPClient()
+    client._conn = _DeadSocketConn()
+    client._creds = ("imap.example.com", 993, "me@example.com", "app-password")
+    monkeypatch.setattr(IMAPClient, "_open", staticmethod(lambda *c: _AliveConn()))
+
+    assert client.ping() is True
+    assert isinstance(client._conn, _AliveConn)
+
+
+def test_ping_without_credentials_reports_lost_connection():
+    client = IMAPClient()
+    client._conn = _DeadSocketConn()
+    with pytest.raises(ConnectionLost):
+        client.ping()
+    assert client.connected is False
+
+
 def test_disconnect_forgets_credentials():
     client = IMAPClient()
     client._conn = _HealthyConn()
