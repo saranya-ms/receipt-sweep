@@ -73,3 +73,82 @@ def test_missing_message_returns_error():
     client._conn = _EmptyConn()
     result = client.read_email("99")
     assert "error" in result
+
+
+def _multipart(text_part, html_part, extra_parts=b""):
+    return (
+        b"From: orders@store.example\r\n"
+        b"Subject: Order Confirmation #1ABC\r\n"
+        b"Date: Wed, 02 Jan 2024 10:00:00 +0000\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b'Content-Type: multipart/mixed; boundary="BOUND"\r\n'
+        b"\r\n"
+        b"--BOUND\r\n"
+        b'Content-Type: text/plain; charset="utf-8"\r\n\r\n'
+        + text_part + b"\r\n"
+        b"--BOUND\r\n"
+        b'Content-Type: text/html; charset="utf-8"\r\n\r\n'
+        + html_part + b"\r\n"
+        + extra_parts
+        + b"--BOUND--\r\n"
+    )
+
+
+def test_links_only_text_part_falls_back_to_html_totals():
+    # Old Navy style: the plain-text part has only links; totals are in HTML.
+    raw = _multipart(
+        b"Old Navy\r\nhttps://click.example/abc\r\nUnsubscribe: https://click.example/u",
+        b"<html><body><table><tr><td>Subtotal</td><td>$40.00</td></tr>"
+        b"<tr><td>Tax</td><td>$6.00</td></tr>"
+        b"<tr><td>Total</td><td>$46.00</td></tr></table></body></html>",
+    )
+    body = _read(raw)["body"]
+    assert "$46.00" in body
+    assert "<td>" not in body
+
+
+def test_plain_text_kept_when_it_has_the_amounts():
+    raw = _multipart(
+        b"Order total: $12.34",
+        b"<html><body><p>Order total: $12.34</p></body></html>",
+    )
+    assert _read(raw)["body"] == "Order total: $12.34"
+
+
+def test_raw_html_in_text_part_is_converted():
+    raw = _multipart(
+        b"<table><tr><td>Total</td><td>$9.99</td></tr></table>",
+        b"",
+    )
+    body = _read(raw)["body"]
+    assert "$9.99" in body
+    assert "<table>" not in body
+
+
+PDF_PART_OCTET = (
+    b"--BOUND\r\n"
+    b"Content-Type: application/octet-stream\r\n"
+    b'Content-Disposition: attachment; filename="receipt_160427.pdf"\r\n'
+    b"Content-Transfer-Encoding: base64\r\n\r\n"
+    b"JVBERi0xLjQK\r\n"
+)
+
+PDF_PART_INLINE = (
+    b"--BOUND\r\n"
+    b'Content-Type: application/pdf; name="invoice.pdf"\r\n'
+    b"Content-Transfer-Encoding: base64\r\n\r\n"
+    b"JVBERi0xLjQK\r\n"
+)
+
+
+def test_pdf_with_generic_mime_type_sets_has_pdf():
+    # la Vie en Rose sends its PDF receipt as application/octet-stream.
+    result = _read(_multipart(b"Your receipt is attached.", b"", PDF_PART_OCTET))
+    assert result["has_pdf"] is True
+    assert result["attachments"][0]["filename"] == "receipt_160427.pdf"
+
+
+def test_inline_pdf_without_attachment_disposition_is_listed():
+    result = _read(_multipart(b"Your receipt is attached.", b"", PDF_PART_INLINE))
+    assert result["has_pdf"] is True
+    assert [a["filename"] for a in result["attachments"]] == ["invoice.pdf"]

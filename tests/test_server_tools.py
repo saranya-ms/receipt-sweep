@@ -15,6 +15,7 @@ EXPECTED_TOOLS = {
     "list_folders",
     "search_emails",
     "read_email",
+    "read_pdf_attachment",
     "save_attachment",
     "search_all_folders",
 }

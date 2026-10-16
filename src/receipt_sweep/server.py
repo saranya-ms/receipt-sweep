@@ -15,7 +15,8 @@ except (ImportError, ModuleNotFoundError):
 
 from mcp.types import ToolAnnotations
 
-from .imap_client import IMAPClient
+from .imap_client import ConnectionLost, IMAPClient
+from .pdf_text import pdf_to_text
 from .providers import list_providers
 
 mcp = FastMCP(
@@ -23,8 +24,10 @@ mcp = FastMCP(
     instructions=(
         "Receipt Sweep connects to the user's email inbox via IMAP "
         "and provides tools to search for receipts, read email content, "
-        "and download PDF attachments. Use these tools with the "
-        "receipt-sweep skill to extract spending data and build spreadsheets."
+        "and read or download PDF attachments. Use these tools with the "
+        "receipt-sweep skill to extract spending data and build spreadsheets. "
+        "Mailbox access is serialized, so concurrent calls are safe but run one "
+        "at a time; a dropped connection is re-established automatically."
     ),
 )
 
@@ -190,8 +193,10 @@ def read_email(message_id: str, folder: str = "INBOX") -> str:
         message_id: The message ID from search_emails results.
         folder: The folder the message is in (must match the search).
 
-    Returns the email's date, sender, subject, full body text,
-    and a list of any attachments (with filenames and sizes).
+    Returns the email's date, sender, subject, body text, and a list of any
+    attachments (with filenames and sizes). The body is taken from whichever
+    of the plain-text or HTML parts contains the order details. If has_pdf is
+    true and the body has no amount, call read_pdf_attachment.
     """
     if not _client.connected:
         return "Error: not connected. Call connect_email first."
@@ -202,6 +207,35 @@ def read_email(message_id: str, folder: str = "INBOX") -> str:
         return json.dumps(result, indent=2, ensure_ascii=False)
     except Exception as e:
         return f"Error reading email: {e}"
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        title="Read PDF attachment text", read_only_hint=True
+    )
+)
+def read_pdf_attachment(message_id: str, filename: str, folder: str = "INBOX") -> str:
+    """Extract the text of a PDF attachment, such as an emailed receipt.
+
+    Use this when read_email lists a PDF attachment and the body only says
+    something like "your receipt is attached".
+
+    Args:
+        message_id: The message ID from search_emails results.
+        filename: The PDF's filename (from read_email's attachments list).
+        folder: The folder the message is in.
+
+    Returns the PDF's text, or an error message.
+    """
+    if not _client.connected:
+        return "Error: not connected. Call connect_email first."
+    try:
+        data = _client.get_attachment(message_id, filename, folder=folder)
+        if data is None:
+            return f"Attachment '{filename}' not found in message {message_id}."
+        return pdf_to_text(data)
+    except Exception as e:
+        return f"Error reading PDF attachment: {e}"
 
 
 @mcp.tool(
@@ -257,7 +291,8 @@ def search_all_folders(
     """Search across ALL folders in the mailbox (inbox, spam, trash, archive, custom folders).
 
     Same parameters as search_emails but runs the search in every folder.
-    Returns results grouped by folder. Slower but thorough.
+    Returns results grouped by folder, plus any folders that could not be
+    searched. Slower but thorough.
     """
     if not _client.connected:
         return "Error: not connected. Call connect_email first."
@@ -267,6 +302,7 @@ def search_all_folders(
         return f"Error listing folders: {e}"
 
     all_results: dict[str, list] = {}
+    failed: dict[str, str] = {}
     for folder in folders:
         try:
             results = _client.search_emails(
@@ -283,18 +319,20 @@ def search_all_folders(
                 for r in results:
                     r["folder"] = folder
                 all_results[folder] = results
-        except Exception:
-            continue
+        except ConnectionLost as e:
+            return f"Error: {e}"
+        except Exception as e:
+            # Report it rather than silently treating the folder as empty.
+            failed[folder] = str(e)
 
-    if not all_results:
+    if not all_results and not failed:
         return "No matching emails found in any folder."
 
     total = sum(len(v) for v in all_results.values())
-    return json.dumps(
-        {"total_results": total, "by_folder": all_results},
-        indent=2,
-        ensure_ascii=False,
-    )
+    output: dict = {"total_results": total, "by_folder": all_results}
+    if failed:
+        output["folders_not_searched"] = failed
+    return json.dumps(output, indent=2, ensure_ascii=False)
 
 
 def main():

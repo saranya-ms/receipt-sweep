@@ -18,10 +18,10 @@ An MCP server + Claude skill that connects to your email inbox, finds receipts a
 ```
 
 1. **You install** the MCP server and skill
-2. **You provide** your email address + an App Password (never stored)
+2. **You pick** your provider, date range and options, then give your email address and an App Password (never stored)
 3. **Claude connects** via IMAP and searches every folder for receipts
-4. **Claude reads** each email, extracts dates, amounts, and store names
-5. **Claude builds** a formatted Excel spreadsheet with categories and totals
+4. **Claude reads** each email, including HTML-only and PDF receipts, and extracts dates, amounts and store names
+5. **Claude builds** a formatted Excel spreadsheet and an offline dashboard with categories and totals
 
 ## Supported email providers
 
@@ -33,23 +33,53 @@ An MCP server + Claude skill that connects to your email inbox, finds receipts a
 | **iCloud Mail** | imap.mail.me.com | [App-Specific Password](https://appleid.apple.com) |
 | **Custom** | Any IMAP server | Password |
 
+## Before you start
+
+Do these once, before installing:
+
+1. **Install `uv`.** The plugin starts its server with `uv`, a small Python tool
+   runner. It also downloads a suitable Python for you if needed.
+
+   macOS / Linux:
+   ```bash
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+   Windows (PowerShell):
+   ```powershell
+   powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
+   Open a new terminal and check it with `uv --version`.
+
+2. **Fully quit and reopen Claude** (Desktop or Claude Code) after installing `uv`.
+   Apps read your `PATH` when they start, so a Claude that was already running
+   can't find `uv`, and the server fails with a *"Connection closed"* error.
+
+3. **Create an App Password** for the email account you want to sweep, using the
+   links in [Supported email providers](#supported-email-providers). It's a
+   separate password just for this tool, not your normal login. Gmail needs
+   2-Step Verification turned on first.
+
 ## Installation
 
-The quickest path is the Claude plugin. The install scripts below are the manual route
-for Claude Desktop.
+The quickest path is the Claude plugin. The install scripts further down are the
+manual route for Claude Desktop.
 
 ### Install as a Claude plugin (recommended)
 
-Requires [`uv`](https://docs.astral.sh/uv/) on your `PATH` (the plugin launches the
-server with `uvx`). In Claude Code:
+**In the Claude desktop app:** open **Settings → Plugins**, click **+ Add**, add the
+marketplace `saranya-ms/receipt-sweep`, then install **Receipt Sweep** from
+*From marketplaces you added*.
+
+**In Claude Code (terminal):**
 
 ```
 /plugin marketplace add saranya-ms/receipt-sweep
 /plugin install receipt-sweep@receipt-sweep
 ```
 
-This installs the MCP server **and** the `receipt-sweep` skill together. Start a new
-session, then say *"Sweep my email for receipts."*
+Either way this installs the MCP server **and** the `receipt-sweep` skill together.
+Plugins load when a session starts, so **start a new session**, then say
+*"Sweep my email for receipts."*
 
 ### Install scripts (Claude Desktop)
 
@@ -70,6 +100,8 @@ cd receipt-sweep
 ```
 
 #### What the installer does
+
+The script route needs Python 3.10+ and `git`, but not `uv`.
 
 1. Checks for Python 3.10+
 2. Creates a virtual environment in `.venv/`
@@ -101,28 +133,46 @@ pip install -e .
 
 ## Usage
 
-After installation, restart Claude and say:
+After installation, start a new session and say:
 
 > **"Sweep my email for receipts"**
 
-Claude will walk you through:
-1. Choosing your email provider
-2. Entering your App Password (shown in the provider's security settings)
-3. Selecting a date range
-4. Running the sweep
+Claude sets things up in two quick steps:
+1. **A few choices in one go**: your email provider, how far back to look (last 30
+   days, last 3 months, this year, or since your last sweep), whether to count
+   **out-of-pocket** spending or full receipt totals, and where to save the files.
+2. **Your email address and App Password.** Claude shows the steps to create an
+   App Password for your provider. Spaces in it are fine; Claude removes them.
+
+Then it connects, sweeps every folder, and confirms what it's doing before it starts.
 
 ### The spreadsheet it produces
 
-**Sheet 1 — Receipts:** Every transaction with Date, Store, Category, Amount, Currency
+**Sheet 1 — Receipts:** Every transaction with Date, Store, Category, Amount, Currency, and Notes
 
 **Sheet 2 — Summary:** Spending totals by category
 
-**Sheet 3 — Notes:** What was searched, what was excluded, PDF-only receipts to review manually
+**Sheet 3 — Notes:** What was searched, what was excluded, and a **Needs review** list
+of any orders whose amount couldn't be read automatically
 
 **Plus — an offline HTML dashboard:** a self-contained `.html` file with KPI tiles, a
 spending-by-category chart, a month-by-month chart, top merchants, and a sortable
 transaction table. It renders entirely in the browser with no internet connection — all
 charts are inline SVG and there are no external requests.
+
+### Out-of-pocket amounts
+
+By default, amounts are **what you actually paid**. When a receipt is split, for example a
+massage billed partly to an insurance or benefits plan, only your own payment is counted,
+and the full total and who covered the rest go in the Notes column. Choose *full receipt
+totals* at the start if you'd rather track the gross amount.
+
+### Receipts it can read
+
+- **Plain-text and HTML emails.** Some stores (Old Navy, Gap and others) put the order
+  total only in the HTML version of the email; Claude reads whichever version has it.
+- **PDF receipts.** When the email just says *"your receipt is attached"*, Claude reads
+  the total straight from the PDF.
 
 ### Incremental sweeps
 
@@ -139,13 +189,14 @@ Each run can save its state so the next run picks up where it left off — no du
 | `list_folders` | List all mailbox folders |
 | `search_emails` | Search one folder by sender, subject, date range |
 | `read_email` | Read the full content of an email |
+| `read_pdf_attachment` | Read the text of a PDF receipt attached to an email |
 | `save_attachment` | Download a PDF or other attachment |
 | `search_all_folders` | Search across every folder at once |
 
 ## Security & privacy
 
 - **App Passwords only** — the server never sees your real password
-- **No storage** — credentials are held in memory for the session only; nothing is written to disk
+- **No storage** — credentials are held in memory for the session only (so a dropped connection can reconnect automatically); nothing is written to disk. The App Password you type is visible in your Claude conversation, so revoke it after a sweep if you prefer
 - **Read-only** — the server opens mailboxes in read-only mode; it never modifies, moves, or deletes emails
 - **Local** — the MCP server runs on your machine; email data never leaves your computer except to Claude for AI processing
 - **Revocable** — you can revoke the App Password at any time from your email provider's security settings
@@ -158,7 +209,8 @@ Receipt Sweep runs entirely on your own machine.
   headers, bodies, and attachments returned by your IMAP searches. It collects no
   analytics, telemetry, or usage data.
 - **Usage & storage** — Your email address and App Password are held in memory for the
-  session only and are never written to disk. Email content is passed to Claude solely to
+  session only (to reconnect automatically if the connection drops) and are never
+  written to disk. Email content is passed to Claude solely to
   extract receipt data at your request.
 - **Third-party sharing** — Nothing is sent to the author or any other third party. Data
   leaves your machine only to (a) your email provider over TLS/IMAP and (b) Claude, for
@@ -169,10 +221,20 @@ Receipt Sweep runs entirely on your own machine.
 
 ## Requirements
 
-- Python 3.10+
-- [`uv`](https://docs.astral.sh/uv/) (for the plugin install path)
+- [`uv`](https://docs.astral.sh/uv/) for the plugin install path (it provides Python
+  automatically), or Python 3.10+ for the install scripts
 - Claude Desktop or Claude Code
-- An email account with IMAP enabled
+- An email account with IMAP access and an App Password
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Server shows **"Connection closed"** / the tools aren't available | `uv` isn't installed or Claude can't see it. Install `uv`, **fully quit and reopen Claude**, then start a new session. |
+| Plugin installed but Claude doesn't use it | Plugins load at session start. Start a new session. |
+| **"Login failed"** | Use an App Password, not your regular password. Check for typos, or create a new one. Gmail needs 2-Step Verification on first. |
+| Plugin manager shows an old name, icon, or *"no plugin in this marketplace"* right after an update | The app cached the marketplace. Remove and re-add the marketplace, or wait a few minutes (GitHub caches the files briefly) and restart Claude. |
+| An order shows up under **Needs review** | Its amount wasn't readable in the email or its PDF. Open the email, then add the amount yourself or tell Claude. |
 
 ## Distribute as a plugin
 
