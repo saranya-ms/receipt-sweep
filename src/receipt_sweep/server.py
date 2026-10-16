@@ -15,13 +15,19 @@ except (ImportError, ModuleNotFoundError):
 
 from mcp.types import ToolAnnotations
 
+from . import __version__
 from .imap_client import ConnectionLost, IMAPClient
 from .pdf_text import pdf_to_text
 from .providers import list_providers
 
+# Appended to status replies so the skill can tell which server build it is
+# talking to; a plugin copy can lag behind the skill that drives it.
+_VERSION_TAG = f"(receipt-sweep server v{__version__})"
+
 mcp = FastMCP(
     "receipt-sweep",
     instructions=(
+        f"Receipt Sweep server v{__version__}. "
         "Receipt Sweep connects to the user's email inbox via IMAP "
         "and provides tools to search for receipts, read email content, "
         "and read or download PDF attachments. Use these tools with the "
@@ -83,7 +89,7 @@ def connect_email(provider: str, email_address: str, app_password: str) -> str:
 
     result = _client.connect(provider, email_address, app_password)
     if result["ok"]:
-        return f"Connected to {result['email']} via {result['host']}."
+        return f"Connected to {result['email']} via {result['host']}. {_VERSION_TAG}"
     else:
         return f"Connection failed: {result['error']}"
 
@@ -107,10 +113,20 @@ def disconnect_email() -> str:
     )
 )
 def connection_status() -> str:
-    """Check whether an email connection is active."""
-    if _client.connected:
-        return f"Connected as {_client.email_address}."
-    return "Not connected. Use connect_email() first."
+    """Check whether an email connection is active, and report the server version.
+
+    Sends a NOOP so a socket the mail server has silently closed is noticed
+    (and re-opened) here rather than on the next search or read.
+    """
+    if not _client.connected:
+        return f"Not connected. Use connect_email() first. {_VERSION_TAG}"
+    try:
+        _client.ping()
+    except ConnectionLost as e:
+        return f"{e} {_VERSION_TAG}"
+    except Exception as e:
+        return f"Connection check failed: {e} {_VERSION_TAG}"
+    return f"Connected as {_client.email_address}. {_VERSION_TAG}"
 
 
 @mcp.tool(

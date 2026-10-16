@@ -30,6 +30,37 @@ def test_all_expected_tools_registered():
     assert names == EXPECTED_TOOLS
 
 
+def test_status_reports_server_version_when_not_connected(monkeypatch):
+    monkeypatch.setattr(server, "_client", server.IMAPClient())
+    reply = server.connection_status()
+    assert "Not connected" in reply
+    assert f"server v{server.__version__}" in reply
+
+
+def test_status_notices_a_dead_session(monkeypatch):
+    def dead():
+        raise server.ConnectionLost("The connection was lost. Call connect_email again.")
+
+    client = server.IMAPClient()
+    client._conn = object()
+    monkeypatch.setattr(client, "ping", dead)
+    monkeypatch.setattr(server, "_client", client)
+    reply = server.connection_status()
+    assert "connect_email again" in reply
+    assert "Connected as" not in reply
+
+
+def test_connect_reply_carries_server_version(monkeypatch):
+    client = server.IMAPClient()
+    monkeypatch.setattr(
+        client, "connect",
+        lambda *a, **k: {"ok": True, "email": "me@example.com", "host": "imap.example.com"},
+    )
+    monkeypatch.setattr(server, "_client", client)
+    reply = server.connect_email("yahoo", "me@example.com", "app-password")
+    assert reply.endswith(f"(receipt-sweep server v{server.__version__})")
+
+
 def test_every_tool_has_title_and_a_hint():
     for t in _tools():
         ann = t.annotations

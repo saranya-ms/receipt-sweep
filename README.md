@@ -185,7 +185,7 @@ Each run can save its state so the next run picks up where it left off — no du
 | `list_email_providers` | Show supported providers and App Password instructions |
 | `connect_email` | Connect to an inbox via IMAP |
 | `disconnect_email` | Close the connection |
-| `connection_status` | Check if connected |
+| `connection_status` | Check the connection is alive (reconnects if it dropped) and show the server version |
 | `list_folders` | List all mailbox folders |
 | `search_emails` | Search one folder by sender, subject, date range |
 | `read_email` | Read the full content of an email |
@@ -235,6 +235,8 @@ Receipt Sweep runs entirely on your own machine.
 | **"Login failed"** | Use an App Password, not your regular password. Check for typos, or create a new one. Gmail needs 2-Step Verification on first. |
 | Plugin manager shows an old name, icon, or *"no plugin in this marketplace"* right after an update | The app cached the marketplace. Remove and re-add the marketplace, or wait a few minutes (GitHub caches the files briefly) and restart Claude. |
 | An order shows up under **Needs review** | Its amount wasn't readable in the email or its PDF. Open the email, then add the amount yourself or tell Claude. |
+| Claude says the server is **outdated**, Old Navy/Gap totals come back empty, or parallel reads fail with `EOF` | You're running an old copy of the plugin. The Claude desktop app / claude.ai and the Claude Code CLI each keep their own copy, and they update separately. Update Receipt Sweep in the one you're using, then start a new session. The `connect_email` reply ends with `(receipt-sweep server vX.Y.Z)`; no tag means a version older than 1.2.1. |
+| Saving the spreadsheet fails with *"permission denied"* or *"resource busy"* | The file is open in Excel (or OneDrive is still syncing it). Close it and ask Claude to try again; Claude saves a `-UPDATED.xlsx` copy beside it if it can't. |
 
 ## Distribute as a plugin
 

@@ -107,6 +107,35 @@ def test_links_only_text_part_falls_back_to_html_totals():
     assert "<td>" not in body
 
 
+def test_old_navy_alternative_with_ca_dollar_amounts_uses_html():
+    # Shape of a real Old Navy Canada confirmation: multipart/alternative,
+    # 8bit parts, a links-only text part, and "CA$" amounts in the HTML.
+    raw = (
+        b"From: \"Old Navy Canada\" <orders@email.oldnavy.ca>\r\n"
+        b"Subject: Order Confirmation #1ABC\r\n"
+        b"Date: Sun, 16 Aug 2026 19:17:00 -0300\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b'Content-Type: multipart/alternative; boundary="ALT"\r\n'
+        b"\r\n"
+        b"--ALT\r\n"
+        b'Content-Type: text/plain; charset="utf-8"\r\n'
+        b"Content-Transfer-Encoding: 8bit\r\n\r\n"
+        b"Old Navy\r\nhttps://click.email.example/?qs=abc\r\n"
+        b"200 Old Navy Lane\r\nGrove City, OH 43123-8605\r\n"
+        b"--ALT\r\n"
+        b'Content-Type: text/html; charset="utf-8"\r\n'
+        b"Content-Transfer-Encoding: 8bit\r\n\r\n"
+        b"<html><body><table>"
+        b"<tr><td>Subtotal (2 items)</td><td>CA$53.00</td></tr>"
+        b"<tr><td>Est Tax</td><td>CA$4.91</td></tr>"
+        b"<tr><td>Total</td><td>CA$40.01</td></tr></table></body></html>\r\n"
+        b"--ALT--\r\n"
+    )
+    body = _read(raw)["body"]
+    assert "CA$40.01" in body
+    assert "click.email.example" not in body
+
+
 def test_plain_text_kept_when_it_has_the_amounts():
     raw = _multipart(
         b"Order total: $12.34",
